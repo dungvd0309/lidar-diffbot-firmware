@@ -16,7 +16,7 @@ public:
     static constexpr int PWM_FREQUENCY = 20000; // Hz
     static constexpr uint8_t PWM_RESOLUTION = 8; // Bits
 
-    static constexpr float base_wheel_track = 0.17f; // khoang cach giua 2 banh xe (m)
+    static constexpr float base_wheel_track = 0.18f; // khoang cach giua 2 banh xe (m)
     static constexpr float wheel_perim_len_div60 = PI * WHEEL_DIAMETER / 60;
     static constexpr float wheel_perim_len_div60_recip = 1/wheel_perim_len_div60;
 
