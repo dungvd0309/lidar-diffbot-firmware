@@ -20,6 +20,13 @@
 #include "battery.h"
 #include "bno055.h"
 
+// ROS executor and support structures
+static rclc_executor_t executor;
+static rclc_support_t support;
+static rcl_allocator_t allocator;
+static rcl_node_t node;
+static rcl_timer_t timer;
+
 // ROS publishers and subscribers
 static rcl_publisher_t encoders_pub; 
 static rcl_publisher_t imu_pub; 
@@ -32,28 +39,28 @@ static sensor_msgs__msg__Imu imu_pub_msg;
 static geometry_msgs__msg__Twist twist_sub_msg;
 static sensor_msgs__msg__BatteryState battery_pub_msg;
 
-// ROS executor and support structures
-static rclc_executor_t executor;
-static rclc_support_t support;
-static rcl_allocator_t allocator;
-static rcl_node_t node;
-static rcl_timer_t timer;
+enum states {
+  WAITING_AGENT,
+  AGENT_AVAILABLE,
+  AGENT_CONNECTED,
+  AGENT_DISCONNECTED
+} state;
 
 size_t number_of_handles = 2; // timer + cmd_vel subscription
-
-unsigned long last_sync_time = 0; // for time sync
 
 #define LED_PIN 2
 
 // Macro for checking return codes of rcl functions
-#define RCCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){error_loop();}}
-#define RCSOFTCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){}}
+#define RCCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){return false;}}
+#define EXECUTE_EVERY_N_MS(MS, X)  do { \
+  static volatile int64_t init = -1; \
+  int64_t now = uxr_millis(); \
+  if (init == -1) { init = now; } \
+  if (now - init >= (MS)) { X; init = now; } \
+} while (0)
 
-void error_loop() {
-    while(1) {
-        digitalWrite(LED_PIN, !digitalRead(LED_PIN));
-        delay(100);
-    }
+void ros_time_sync() {
+    EXECUTE_EVERY_N_MS(60000, (void)rmw_uros_sync_session(10));
 }
 
 // publishing timer cb
@@ -106,10 +113,109 @@ static void timer_callback(rcl_timer_t * timer, int64_t last_call_time)
         battery_pub_msg.header.stamp.nanosec = encoders_pub_msg.header.stamp.nanosec;
         
         // Publish msg
-        RCSOFTCHECK(rcl_publish(&encoders_pub, &encoders_pub_msg, NULL));
-        RCSOFTCHECK(rcl_publish(&imu_pub, &imu_pub_msg, NULL));
-        RCSOFTCHECK(rcl_publish(&battery_pub, &battery_pub_msg, NULL));
+        rcl_publish(&encoders_pub, &encoders_pub_msg, NULL);
+        rcl_publish(&imu_pub, &imu_pub_msg, NULL);
+        rcl_publish(&battery_pub, &battery_pub_msg, NULL);
     }
+}
+
+// /cmd_vel topic callback
+void subscription_callback(const void *msgin) {
+    const geometry_msgs__msg__Twist * msg = (const geometry_msgs__msg__Twist *)msgin;
+
+    // Extract linear and angular velocity from the Twist msg
+    float target_speed_lin_x = msg->linear.x;
+    float target_speed_ang_z = msg->angular.z;
+
+    // Serial.print("linear.x ");
+    // Serial.print(msg->linear.x);
+    // Serial.print(", angular.z ");
+    // Serial.println(msg->angular.z);
+
+    // Convert to wheel speeds
+    float twist_target_speed_right = 0;
+    float twist_target_speed_left = 0;
+    CONFIG::twistToWheelSpeeds(target_speed_lin_x, target_speed_ang_z,
+    &twist_target_speed_right, &twist_target_speed_left);
+
+    // Serial.print("twist_target_speed_right ");
+    // Serial.print(twist_target_speed_right);
+    // Serial.print(", twist_target_speed_left ");
+    // Serial.println(twist_target_speed_left);
+    
+    // Convert to target RPM
+    float twist_target_rpm_right = CONFIG::speed_to_rpm(twist_target_speed_right);
+    float twist_target_rpm_left = CONFIG::speed_to_rpm(twist_target_speed_left);
+    
+    set_motors_rpm(twist_target_rpm_left, twist_target_rpm_right);
+}
+
+bool create_entities()
+{
+    allocator = rcl_get_default_allocator();
+
+    // create init_options
+    RCCHECK(rclc_support_init(&support, 0, NULL, &allocator));
+
+    // create node
+    RCCHECK(rclc_node_init_default(&node, "esp32_node", "", &support));
+
+    // create publishers: encoders, imu, battery
+    RCCHECK(rclc_publisher_init_default(
+        &encoders_pub,
+        &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, JointState), 
+        "/encoders/data_raw"));
+
+    RCCHECK(rclc_publisher_init_default(
+        &imu_pub,
+        &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Imu), 
+        "/imu/data_raw"));
+
+    RCCHECK(rclc_publisher_init_default(
+        &battery_pub,
+        &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, BatteryState), 
+        "/battery_state"));
+
+    // create timer
+    const unsigned int timer_timeout = 20; // 50hz
+    RCCHECK(rclc_timer_init_default(
+        &timer,
+        &support,
+        RCL_MS_TO_NS(timer_timeout),
+        timer_callback));
+
+    // create subscriber
+    RCCHECK(rclc_subscription_init_default(
+        &cmd_vel_sub,
+        &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist),
+        "/cmd_vel"));
+    
+    // create executor
+    RCCHECK(rclc_executor_init(&executor, &support.context, number_of_handles, &allocator));
+    RCCHECK(rclc_executor_add_timer(&executor, &timer));
+    RCCHECK(rclc_executor_add_subscription(&executor, &cmd_vel_sub, &twist_sub_msg, &subscription_callback, ON_NEW_DATA));
+    ros_time_sync();
+    
+    return true;
+}
+
+void destroy_entities()
+{
+    rmw_context_t * rmw_context = rcl_context_get_rmw_context(&support.context);
+    (void) rmw_uros_set_context_entity_destroy_session_timeout(rmw_context, 0);
+
+    rcl_publisher_fini(&encoders_pub, &node);
+    rcl_publisher_fini(&imu_pub, &node);
+    rcl_publisher_fini(&battery_pub, &node);
+    rcl_subscription_fini(&cmd_vel_sub, &node);
+    rcl_timer_fini(&timer);
+    rclc_executor_fini(&executor);
+    rcl_node_fini(&node);
+    rclc_support_fini(&support);
 }
 
 // Initialize ROS message 
@@ -160,123 +266,48 @@ static void ros_msg_init()
     // joint_state_pub_msg.header.frame_id.capacity = 0;
 }
 
-// /cmd_vel topic callback
-void subscription_callback(const void *msgin) {
-    const geometry_msgs__msg__Twist * msg = (const geometry_msgs__msg__Twist *)msgin;
-
-    // Extract linear and angular velocity from the Twist msg
-    float target_speed_lin_x = msg->linear.x;
-    float target_speed_ang_z = msg->angular.z;
-
-    // Serial.print("linear.x ");
-    // Serial.print(msg->linear.x);
-    // Serial.print(", angular.z ");
-    // Serial.println(msg->angular.z);
-
-    // Convert to wheel speeds
-    float twist_target_speed_right = 0;
-    float twist_target_speed_left = 0;
-    CONFIG::twistToWheelSpeeds(target_speed_lin_x, target_speed_ang_z,
-    &twist_target_speed_right, &twist_target_speed_left);
-
-    // Serial.print("twist_target_speed_right ");
-    // Serial.print(twist_target_speed_right);
-    // Serial.print(", twist_target_speed_left ");
-    // Serial.println(twist_target_speed_left);
-    
-    // Convert to target RPM
-    float twist_target_rpm_right = CONFIG::speed_to_rpm(twist_target_speed_right);
-    float twist_target_rpm_left = CONFIG::speed_to_rpm(twist_target_speed_left);
-    
-    set_motors_rpm(twist_target_rpm_left, twist_target_rpm_right);
-}
 
 void ros_init()
 {   
     set_microros_transports();
-
     pinMode(LED_PIN, OUTPUT);
-    digitalWrite(LED_PIN, HIGH); 
-    
     delay(2000);
-
-    allocator = rcl_get_default_allocator();
-    Serial.println("Created allocator. Connecting to micro_ros_agent...");
-
-    // create init_options
-    RCCHECK(rclc_support_init(&support, 0, NULL, &allocator));
-    Serial.println("Created init options");
-
-    // time sync
-    RCCHECK(rmw_uros_sync_session(1000));
-    last_sync_time = millis();
-    Serial.println("Time synced");
-
-    // create node
-    RCCHECK(rclc_node_init_default(&node, "esp32_node", "", &support));
-    Serial.println("Created node");
-
-    // create publishers: encoders, imu, battery
-    RCCHECK(rclc_publisher_init_default(
-        &encoders_pub,
-        &node,
-        ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, JointState), 
-        "/encoders/data_raw"));
-    Serial.println("Created /encoders/data_raw publisher");
-
-    RCCHECK(rclc_publisher_init_default(
-        &imu_pub,
-        &node,
-        ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Imu), 
-        "/imu/data_raw"));
-    Serial.println("Created /imu/data_raw publisher");
-
-    RCCHECK(rclc_publisher_init_default(
-        &battery_pub,
-        &node,
-        ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, BatteryState), 
-        "/battery_state"));
-    Serial.println("Created /battery_state publisher");
-
-    // create timer
-    const unsigned int timer_timeout = 20; // 50hz
-    RCCHECK(rclc_timer_init_default(
-        &timer,
-        &support,
-        RCL_MS_TO_NS(timer_timeout),
-        timer_callback));
-    Serial.println("Created timer");
-
-    // create subscriber
-    RCCHECK(rclc_subscription_init_default(
-        &cmd_vel_sub,
-        &node,
-        ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist),
-        "/cmd_vel"));
-    Serial.println("Created /cmd_vel subcriber");
-    
-    // create executor
-    RCCHECK(rclc_executor_init(&executor, &support.context, number_of_handles, &allocator));
-    RCCHECK(rclc_executor_add_timer(&executor, &timer));
-    RCCHECK(rclc_executor_add_subscription(&executor, &cmd_vel_sub, &twist_sub_msg, &subscription_callback, ON_NEW_DATA));
-    Serial.println("Created executor");
-
-    // initialize ROS message
     ros_msg_init();
-    digitalWrite(LED_PIN, LOW);
-    
-    Serial.println("micro-ROS initialised!");
+    state = WAITING_AGENT;
 }      
 
-void ros_time_sync() {
-    if (millis() - last_sync_time > 60000) {
-      rmw_uros_sync_session(10); 
-      last_sync_time = millis();
-  }
-}
 
-void ros_update(int delay)
+void ros_update()
 {
-    rclc_executor_spin_some(&executor, RCL_MS_TO_NS(delay));
     ros_time_sync();
+    switch (state) {
+    case WAITING_AGENT:
+      EXECUTE_EVERY_N_MS(500, state = (RMW_RET_OK == rmw_uros_ping_agent(100, 1)) ? AGENT_AVAILABLE : WAITING_AGENT;);
+      break;
+    case AGENT_AVAILABLE:
+      state = (true == create_entities()) ? AGENT_CONNECTED : WAITING_AGENT;
+      if (state == WAITING_AGENT) {
+        destroy_entities();
+      };
+      break;
+    case AGENT_CONNECTED:
+      EXECUTE_EVERY_N_MS(200, state = (RMW_RET_OK == rmw_uros_ping_agent(100, 1)) ? AGENT_CONNECTED : AGENT_DISCONNECTED;);
+      ros_time_sync();
+      if (state == AGENT_CONNECTED) {
+        rclc_executor_spin_some(&executor, RCL_MS_TO_NS(100));
+      }
+      break;
+    case AGENT_DISCONNECTED:
+      destroy_entities();
+      state = WAITING_AGENT;
+      break;
+    default:
+      break;
+  }
+
+  if (state == AGENT_CONNECTED) {
+    digitalWrite(LED_PIN, 1);
+  } else {
+    digitalWrite(LED_PIN, 0);
+  }
 }
