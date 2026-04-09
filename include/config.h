@@ -52,11 +52,11 @@ public:
     //=== === === === ===//
 
     //=== Kinematics config ===//
-    static constexpr float speed_to_rpm(float speed_ms) {
+    static constexpr float linear_speed_to_rpm(float speed_ms) {
         return speed_ms*wheel_perim_len_div60_recip;
     }
 
-    static constexpr float rpm_to_speed(float rpm) {
+    static constexpr float rpm_to_linear_speed(float rpm) {
         return rpm*wheel_perim_len_div60;
     }
 

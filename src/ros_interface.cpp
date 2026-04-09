@@ -78,8 +78,8 @@ static void timer_callback(rcl_timer_t * timer, int64_t last_call_time)
         float left_rpm = 0.0f;
         float right_rpm = 0.0f;
         get_motors_rpm(&left_rpm, &right_rpm);
-        encoders_pub_msg.velocity.data[0] = left_rpm;
-        encoders_pub_msg.velocity.data[1] = right_rpm;
+        encoders_pub_msg.velocity.data[0] = CONFIG::rpm_to_linear_speed(left_rpm);
+        encoders_pub_msg.velocity.data[1] = CONFIG::rpm_to_linear_speed(right_rpm);
 
         // IMU to msg
         ImuData imu_data;
@@ -144,8 +144,8 @@ void subscription_callback(const void *msgin) {
     // Serial.println(twist_target_speed_left);
     
     // Convert to target RPM
-    float twist_target_rpm_right = CONFIG::speed_to_rpm(twist_target_speed_right);
-    float twist_target_rpm_left = CONFIG::speed_to_rpm(twist_target_speed_left);
+    float twist_target_rpm_right = CONFIG::linear_speed_to_rpm(twist_target_speed_right);
+    float twist_target_rpm_left = CONFIG::linear_speed_to_rpm(twist_target_speed_left);
     
     set_motors_rpm(twist_target_rpm_left, twist_target_rpm_right);
 }
@@ -181,11 +181,11 @@ bool create_entities()
 
     // create timer
     const unsigned int timer_timeout = 20; // 50hz
-    RCCHECK(rclc_timer_init_default(
+    RCCHECK(rclc_timer_init_default2(
         &timer,
         &support,
         RCL_MS_TO_NS(timer_timeout),
-        timer_callback));
+        timer_callback, true));
 
     // create subscriber
     RCCHECK(rclc_subscription_init_default(
@@ -198,6 +198,7 @@ bool create_entities()
     RCCHECK(rclc_executor_init(&executor, &support.context, number_of_handles, &allocator));
     RCCHECK(rclc_executor_add_timer(&executor, &timer));
     RCCHECK(rclc_executor_add_subscription(&executor, &cmd_vel_sub, &twist_sub_msg, &subscription_callback, ON_NEW_DATA));
+    
     ros_time_sync();
     
     return true;
@@ -279,7 +280,6 @@ void ros_init()
 
 void ros_update()
 {
-    ros_time_sync();
     switch (state) {
     case WAITING_AGENT:
       EXECUTE_EVERY_N_MS(500, state = (RMW_RET_OK == rmw_uros_ping_agent(100, 1)) ? AGENT_AVAILABLE : WAITING_AGENT;);
