@@ -8,7 +8,7 @@ public:
     //=== Motor and encoder config ===//
     static constexpr float WHEEL_DIAMETER = 0.065;             // m
     static constexpr float WHEEL_RADIUS = WHEEL_DIAMETER * 0.5;  // m
-    static constexpr float GEAR_RATIO = 20.4068;
+    static constexpr float GEAR_RATIO = 20.412;
     static constexpr int ENCODER_CPR = 11;  // số xung trên 1 vòng encoder (COUNTS_PER_REVOLUTION)
     static constexpr int DECODE_FACTOR = 4; // hệ số giải mã xung A/B (x1, x2, x4)
     static constexpr float WHEEL_CPR = GEAR_RATIO * ENCODER_CPR * DECODE_FACTOR; // số xung trên 1 vòng trục (COUNTS_PER_REVOLUTION)
