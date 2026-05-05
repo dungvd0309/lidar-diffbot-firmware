@@ -39,6 +39,14 @@ static sensor_msgs__msg__Imu imu_pub_msg;
 static geometry_msgs__msg__Twist twist_sub_msg;
 static sensor_msgs__msg__BatteryState battery_pub_msg;
 
+// Overrides the weak default transport_open from micro_ros_arduino so the
+// serial link uses CONFIG::ros_serial_baudrate on every (re)open.
+extern "C" bool arduino_transport_open(struct uxrCustomTransport * /*transport*/)
+{
+    Serial.begin(CONFIG::ros_serial_baudrate);
+    return true;
+}
+
 enum states {
   WAITING_AGENT,
   AGENT_AVAILABLE,

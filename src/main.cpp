@@ -6,7 +6,7 @@
 #include "bno055.h"
 
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(CONFIG::ros_serial_baudrate);
 
   battery_init();
   encoders_init();

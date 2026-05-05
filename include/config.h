@@ -83,6 +83,10 @@ public:
     static constexpr float battery_ema_alpha = 0.05f;    // EMA filter alpha
     //=== === === === ===//
 
+    //=== micro-ROS serial transport config ===//
+    static constexpr unsigned long ros_serial_baudrate = 921600;
+    //=== === === === ===//
+
     //=== BNO055 IMU config ===//
     static constexpr uint8_t bno055_addr = 0x29;
     static constexpr uint8_t bno055_sda = 21;
