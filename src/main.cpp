@@ -6,7 +6,7 @@
 #include "bno055.h"
 
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(921600);
 
   battery_init();
   encoders_init();
