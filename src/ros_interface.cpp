@@ -25,7 +25,8 @@ static rclc_executor_t executor;
 static rclc_support_t support;
 static rcl_allocator_t allocator;
 static rcl_node_t node;
-static rcl_timer_t timer;
+static rcl_timer_t sensor_timer;
+static rcl_timer_t battery_timer; 
 
 // ROS publishers and subscribers
 static rcl_publisher_t encoders_pub; 
@@ -46,7 +47,7 @@ enum states {
   AGENT_DISCONNECTED
 } state;
 
-size_t number_of_handles = 2; // timer + cmd_vel subscription
+size_t number_of_handles = 3; // 2 timers + 1 subscription
 
 #define LED_PIN 2
 
@@ -64,7 +65,7 @@ void ros_time_sync() {
 }
 
 // publishing timer cb
-static void timer_callback(rcl_timer_t * timer, int64_t last_call_time)
+static void sensor_timer_callback(rcl_timer_t * timer, int64_t last_call_time)
 {
     RCLC_UNUSED(last_call_time);
     if (timer != NULL) {
@@ -98,11 +99,6 @@ static void timer_callback(rcl_timer_t * timer, int64_t last_call_time)
             imu_pub_msg.linear_acceleration.z = imu_data.linear_acceleration_z;
         }
 
-        // Battery to msg
-        BatteryData battery_data = battery_read();
-        battery_pub_msg.voltage = battery_data.voltage;
-        battery_pub_msg.percentage = battery_data.percentage;
-
         // Bind timestamp to msg 
         int64_t time_ns = rmw_uros_epoch_nanos();
         encoders_pub_msg.header.stamp.sec = time_ns / 1000000000;
@@ -115,6 +111,24 @@ static void timer_callback(rcl_timer_t * timer, int64_t last_call_time)
         // Publish msg
         rcl_publish(&encoders_pub, &encoders_pub_msg, NULL);
         rcl_publish(&imu_pub, &imu_pub_msg, NULL);
+    }
+}
+
+static void battery_timer_callback(rcl_timer_t * timer, int64_t last_call_time)
+{
+    RCLC_UNUSED(last_call_time);
+    if (timer != NULL) {
+        // Battery to msg
+        BatteryData battery_data = battery_read();
+        battery_pub_msg.voltage = battery_data.voltage;
+        battery_pub_msg.percentage = battery_data.percentage;
+
+        // Bind timestamp to msg 
+        int64_t time_ns = rmw_uros_epoch_nanos();
+        battery_pub_msg.header.stamp.sec = time_ns / 1000000000;
+        battery_pub_msg.header.stamp.nanosec = time_ns % 1000000000;
+
+        // Publish msg
         rcl_publish(&battery_pub, &battery_pub_msg, NULL);
     }
 }
@@ -180,12 +194,17 @@ bool create_entities()
         "/battery_state"));
 
     // create timer
-    const unsigned int timer_timeout = 20; // 50hz
     RCCHECK(rclc_timer_init_default2(
-        &timer,
+        &sensor_timer,
         &support,
-        RCL_MS_TO_NS(timer_timeout),
-        timer_callback, true));
+        RCL_MS_TO_NS(20), // 50hz
+        sensor_timer_callback, true));
+
+    RCCHECK(rclc_timer_init_default2(
+        &battery_timer,
+        &support,
+        RCL_MS_TO_NS(1000), // 1hz
+        battery_timer_callback, true));
 
     // create subscriber
     RCCHECK(rclc_subscription_init_default(
@@ -196,7 +215,8 @@ bool create_entities()
     
     // create executor
     RCCHECK(rclc_executor_init(&executor, &support.context, number_of_handles, &allocator));
-    RCCHECK(rclc_executor_add_timer(&executor, &timer));
+    RCCHECK(rclc_executor_add_timer(&executor, &sensor_timer));
+    RCCHECK(rclc_executor_add_timer(&executor, &battery_timer));
     RCCHECK(rclc_executor_add_subscription(&executor, &cmd_vel_sub, &twist_sub_msg, &subscription_callback, ON_NEW_DATA));
     
     ros_time_sync();
@@ -213,7 +233,7 @@ void destroy_entities()
     rcl_publisher_fini(&imu_pub, &node);
     rcl_publisher_fini(&battery_pub, &node);
     rcl_subscription_fini(&cmd_vel_sub, &node);
-    rcl_timer_fini(&timer);
+    rcl_timer_fini(&sensor_timer);
     rclc_executor_fini(&executor);
     rcl_node_fini(&node);
     rclc_support_fini(&support);
@@ -300,6 +320,7 @@ void ros_update()
     case AGENT_DISCONNECTED:
       destroy_entities();
       state = WAITING_AGENT;
+      set_motors_rpm(0, 0); // stop motor
       break;
     default:
       break;
