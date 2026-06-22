@@ -4,12 +4,14 @@
 [![Firmware](https://img.shields.io/badge/Firmware-repo-blue)](https://github.com/dungvd0309/lidar-diffbot-firmware)
 [![ROS2_packages](https://img.shields.io/badge/ROS2_packages-repo-blue)](https://github.com/dungvd0309/lidar-diffbot-ros2)
 
-ESP32 firmware for a autonomous differential-drive robot. Handles DC motor control via PWM, encoder feedback, PID closed-loop speed control, IMU reading, battery estimation, and UART communication with a Raspberry Pi 4 running ROS 2. ROS 2 packages (SLAM, Nav2, exploration) are in the [lidar-diffbot-ros2](https://github.com/dungvd0309/lidar-diffbot-ros2) repo.
+ESP32 firmware for the low-level control of an autonomous differential-drive robot. Handles DC motor control via PWM, encoder feedback, PID closed-loop speed control, IMU reading, battery estimation, and UART communication with a Raspberry Pi 4 running ROS 2.
+
+> **This is a two-repo project.** This repo contains the ESP32 firmware and hardware/wiring details. The ROS 2 software stack for high-level control (SLAM, Nav2, EKF, autonomous exploration) is in [lidar-diffbot-ros2](https://github.com/dungvd0309/lidar-diffbot-ros2).
 
 <div align="center">
   <img width="400" height="400" alt="robot_pic" src="https://github.com/user-attachments/assets/11d7f795-ffd3-4c5b-8679-49c54d89d182"/>
 
-  Demo video on [YouTube](https://youtu.be/oauRnWwvWOY?t=132)
+  *Demo video on [YouTube](https://youtu.be/oauRnWwvWOY?t=132)*
 </div>
 
 ## Table of Contents
@@ -54,6 +56,5 @@ ESP32 firmware for a autonomous differential-drive robot. Handles DC motor contr
 </div>
 
 ## Acknowledgements
-[PID_Timed](https://github.com/kaiaai/arduino_pid_timed)
-
-[micro-ROS-arduino](https://github.com/micro-ROS/micro_ros_arduino)
+- [PID_Timed](https://github.com/kaiaai/arduino_pid_timed)
+- [micro-ROS-arduino](https://github.com/micro-ROS/micro_ros_arduino)
